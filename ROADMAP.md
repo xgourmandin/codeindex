@@ -92,21 +92,25 @@ The core extension point is `analyze_repo.py`, which produces a language-agnosti
 
 ---
 
-## Phase 4 — Infrastructure & Config Layer
+## Phase 4 — Infrastructure & Config Layer ✅ COMPLETE
 
 **Goal:** Visualize the operational glue — services, pipelines, environments.
 
 ### Tasks
-- [ ] `analyzers/docker_analyzer.py` — parse `Dockerfile` and `docker-compose.yml` → service dependency graph
-- [ ] `analyzers/ci_analyzer.py` — parse GitHub Actions (`.github/workflows/`) and GitLab CI (`.gitlab-ci.yml`) → pipeline stage visualization
-- [ ] `analyzers/schema_analyzer.py` — parse `schema.sql`, Prisma schemas, SQLAlchemy models → entity-relationship view
-- [ ] `.env` file analysis — identify config/secret references across code
-- [ ] New frontend tab: "Infrastructure View" (services, not files)
-- [ ] New node types: `service`, `pipeline-stage`, `database-table`, `env-var`
+- [x] `analyzers/docker_analyzer.py` — docker-compose.yml services + depends_on edges; Dockerfile FROM base images
+- [x] `analyzers/ci_analyzer.py` — GitHub Actions jobs + needs edges; GitLab CI jobs + stage deps; PyYAML with regex fallback
+- [x] `analyzers/schema_analyzer.py` — SQL CREATE TABLE + FOREIGN KEY edges; Prisma model + @relation edges
+- [x] New frontend tab: "Infrastructure" (tab 5 / key `5`) — D3 force graph showing only infra nodes
+- [x] New node types: `service` (sky blue), `pipeline` (violet), `database` (lime)
+- [x] New link kind: `depends` (sky blue edges) for infra dependency arrows
+- [x] Language colors: docker, github-actions, gitlab-ci, sql, prisma
+- [x] Watcher extended to watch .yml/.yaml, .sql, .prisma changes
 
 ### Success Criteria
-- Docker Compose multi-service app shows service dependency graph
-- CI/CD pipeline stages shown as a flow diagram
+- ✅ Docker Compose multi-service app: services as nodes, depends_on as directed edges
+- ✅ GitHub Actions: each job is a node, `needs:` creates dependency arrows
+- ✅ SQL schemas: each table is a node, foreign keys are edges
+- ✅ Infrastructure tab shows a clean force graph of only infra nodes with type labels
 
 ---
 

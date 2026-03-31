@@ -36,6 +36,10 @@
     --node-route:     #f97316;
     --node-store:     #8b5cf6;
     --node-style:     #06b6d4;
+
+    --node-service:   #0ea5e9;
+    --node-pipeline:  #a855f7;
+    --node-database:  #84cc16;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -626,6 +630,7 @@
     <button class="tab-btn" data-tab="three">3D Network</button>
     <button class="tab-btn" data-tab="matrix">Dependency Matrix</button>
     <button class="tab-btn" data-tab="treemap">Treemap / Size</button>
+    <button class="tab-btn" data-tab="infra">Infrastructure</button>
   </div>
 
   <div class="main">
@@ -639,6 +644,9 @@
       <div class="legend-item"><div class="legend-dot" style="background:var(--node-style)"></div> Stylesheet</div>
       <div class="legend-item"><div class="legend-dot" style="background:var(--node-import)"></div> External Import</div>
       <div class="legend-item"><div class="legend-dot" style="background:var(--node-config)"></div> Config / Data</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--node-service)"></div> Service (Docker)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--node-pipeline)"></div> CI/CD Job</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--node-database)"></div> DB Table / Model</div>
 
       <h3 style="margin-top:16px">Languages</h3>
       <div id="lang-legend" style="margin-bottom:12px">
@@ -728,6 +736,17 @@
         </div>
         <svg id="treemap-svg" style="flex:1;width:100%"></svg>
       </div>
+
+      <!-- Infrastructure View -->
+      <div class="tab-panel" id="infra-panel">
+        <svg id="infra-svg" style="width:100%;height:100%"></svg>
+        <div class="watermark">INFRASTRUCTURE</div>
+        <div id="infra-empty" style="display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;color:var(--muted)">
+          <div style="font-size:32px;margin-bottom:12px">🏗️</div>
+          <div style="font-size:13px">No infrastructure detected.</div>
+          <div style="font-size:11px;margin-top:6px">Add a <code>docker-compose.yml</code>, GitHub Actions workflow, or SQL schema to this repo.</div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -815,6 +834,11 @@ const LANG_COLOR_HEX = {
   java:       "#b07219",
   kotlin:     "#a97bff",
   php:        "#777bb4",
+  docker:          "#0ea5e9",
+  "github-actions": "#a855f7",
+  "gitlab-ci":      "#fc6d26",
+  sql:             "#84cc16",
+  prisma:          "#5a67d8",
 };
 
 // Active language filter — populated after data load
@@ -830,6 +854,9 @@ function nodeColor(d) {
     route:     "#f97316",
     store:     "#8b5cf6",
     style:     "#06b6d4",
+    service:   "#0ea5e9",
+    pipeline:  "#a855f7",
+    database:  "#84cc16",
   };
   if (typeColors[d.type]) return typeColors[d.type];
   // "module" nodes use language color
@@ -851,6 +878,9 @@ const TYPE_COLOR_HEX = {
   route:     "#f97316",
   store:     "#8b5cf6",
   style:     "#06b6d4",
+  service:   "#0ea5e9",
+  pipeline:  "#a855f7",
+  database:  "#84cc16",
   class:     "#7c3aed",
   function:  "#10b981",
   import:    "#f59e0b",
@@ -891,6 +921,8 @@ function updateLangLegend() {
     vue: 'Vue', css: 'CSS', scss: 'SCSS', less: 'Less',
     go: 'Go', ruby: 'Ruby', rust: 'Rust',
     java: 'Java', kotlin: 'Kotlin', php: 'PHP',
+    docker: 'Docker', 'github-actions': 'GitHub Actions', 'gitlab-ci': 'GitLab CI',
+    sql: 'SQL', prisma: 'Prisma',
   };
   container.innerHTML = langs.map(lang => {
     const active = LANG_FILTER.has(lang);
@@ -950,7 +982,7 @@ async function loadGraph() {
   overlay.classList.add('hidden');
   updateStats();
   // Re-init all rendered views
-  threeInit = false; treemapInit = false; matrixInit = false;
+  threeInit = false; treemapInit = false; matrixInit = false; infraInit = false;
   initForceGraph();
   if (document.getElementById('three-panel').classList.contains('active')) initThree();
   if (document.getElementById('matrix-panel').classList.contains('active')) initMatrix();
@@ -972,7 +1004,8 @@ document.getElementById('refresh-btn').addEventListener('click', async () => {
 
 // ─── TAB SWITCHING ──────────────────────────────────────────────────────────
 const tabBtns = document.querySelectorAll('.tab-btn');
-const tabPanels = { svg: 'svg-panel', three: 'three-panel', matrix: 'matrix-panel', treemap: 'treemap-panel' };
+const tabPanels = { svg: 'svg-panel', three: 'three-panel', matrix: 'matrix-panel', treemap: 'treemap-panel', infra: 'infra-panel' };
+let infraInit = false;
 
 function switchTab(tab) {
   tabBtns.forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
@@ -981,6 +1014,7 @@ function switchTab(tab) {
   if (tab === 'three' && !threeInit) initThree();
   if (tab === 'treemap' && !treemapInit) initTreemap();
   if (tab === 'matrix' && !matrixInit) initMatrix();
+  if (tab === 'infra' && !infraInit) { buildInfraGraph(); infraInit = true; }
 }
 
 tabBtns.forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
@@ -1161,6 +1195,7 @@ function initForceGraph() {
       if (cycleEdges.has(`${s}→${t}`)) return '#ef4444';
       if (d.kind === 'renders') return '#ec4899';
       if (d.kind === 'styles')  return '#06b6d4';
+      if (d.kind === 'depends') return '#0ea5e9';
       return internalIds.has(t) ? '#00d4ff' : '#f59e0b';
     })
     .attr('marker-end', d => {
@@ -1649,7 +1684,7 @@ document.addEventListener('keydown', e => {
     if (e.key === 'Escape') e.target.blur();
     return;
   }
-  const tabMap = { '1': 'svg', '2': 'three', '3': 'matrix', '4': 'treemap' };
+  const tabMap = { '1': 'svg', '2': 'three', '3': 'matrix', '4': 'treemap', '5': 'infra' };
   if (tabMap[e.key]) { switchTab(tabMap[e.key]); return; }
   if (e.key === 'f' || e.key === 'F') {
     const s = document.getElementById('graph-search');
@@ -1661,6 +1696,123 @@ document.addEventListener('keydown', e => {
     document.getElementById('graph-search').dispatchEvent(new Event('input'));
   }
 });
+
+// ─── INFRASTRUCTURE VIEW ─────────────────────────────────────────────────────
+const INFRA_TYPES = new Set(['service', 'pipeline', 'database']);
+
+function buildInfraGraph() {
+  const svgEl = document.getElementById('infra-svg');
+  while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
+
+  const infraNodes = NODES.filter(n => INFRA_TYPES.has(n.type));
+  const infraIds   = new Set(infraNodes.map(n => n.id));
+  const infraLinks = LINKS.filter(l => infraIds.has(nodeId(l.source)) && infraIds.has(nodeId(l.target)));
+
+  const emptyEl = document.getElementById('infra-empty');
+  if (infraNodes.length === 0) {
+    emptyEl.style.display = 'block';
+    return;
+  }
+  emptyEl.style.display = 'none';
+
+  const svg       = d3.select('#infra-svg');
+  const container = document.getElementById('infra-panel');
+  const W = container.clientWidth  || 900;
+  const H = container.clientHeight || 600;
+  svg.attr('width', W).attr('height', H);
+
+  const defs = svg.append('defs');
+  const glow = defs.append('filter').attr('id', 'infra-glow');
+  glow.append('feGaussianBlur').attr('stdDeviation', '4').attr('result', 'coloredBlur');
+  const feMerge = glow.append('feMerge');
+  feMerge.append('feMergeNode').attr('in', 'coloredBlur');
+  feMerge.append('feMergeNode').attr('in', 'SourceGraphic');
+
+  // Arrow marker
+  defs.append('marker').attr('id', 'infra-arrow')
+    .attr('viewBox', '0 -4 8 8').attr('refX', 22).attr('refY', 0)
+    .attr('markerWidth', 6).attr('markerHeight', 6).attr('orient', 'auto')
+    .append('path').attr('d', 'M0,-4L8,0L0,4').attr('fill', '#0ea5e9').attr('opacity', 0.8);
+
+  const nodes = infraNodes.map(d => ({ ...d }));
+  const links = infraLinks.map(d => ({ ...d }));
+
+  const sim = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id(d => d.id).distance(120).strength(0.6))
+    .force('charge', d3.forceManyBody().strength(-400))
+    .force('center', d3.forceCenter(W / 2, H / 2))
+    .force('collision', d3.forceCollide(50));
+
+  const zoom = d3.zoom().scaleExtent([0.2, 4]).on('zoom', e => g.attr('transform', e.transform));
+  svg.call(zoom);
+  const g = svg.append('g');
+
+  const linkEl = g.append('g').selectAll('line').data(links).enter().append('line')
+    .attr('stroke', '#0ea5e9').attr('stroke-opacity', 0.5)
+    .attr('stroke-width', 1.5).attr('marker-end', 'url(#infra-arrow)');
+
+  const TYPE_SHAPES = {
+    service:  { r: 22, symbol: '⬡' },
+    pipeline: { r: 18, symbol: '▶' },
+    database: { r: 20, symbol: '🗄' },
+  };
+
+  const nodeEl = g.append('g').selectAll('g').data(nodes).enter().append('g')
+    .style('cursor', 'pointer')
+    .call(d3.drag()
+      .on('start', (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on('drag',  (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on('end',   (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; })
+    )
+    .on('mouseenter', (e, d) => showTooltip(e, d))
+    .on('mouseleave', hideTooltip)
+    .on('click', (e, d) => { e.stopPropagation(); showNodeDetail(d); });
+
+  nodeEl.append('circle')
+    .attr('r', d => TYPE_SHAPES[d.type]?.r || 20)
+    .attr('fill', d => nodeColor(d) + '22')
+    .attr('stroke', d => nodeColor(d))
+    .attr('stroke-width', 2)
+    .attr('filter', 'url(#infra-glow)');
+
+  nodeEl.append('circle').attr('r', 6).attr('fill', d => nodeColor(d));
+
+  // Label: show short name (strip path prefix)
+  nodeEl.append('text')
+    .text(d => d.id.includes('/') ? d.id.split('/').pop() : d.id)
+    .attr('x', 0).attr('y', d => (TYPE_SHAPES[d.type]?.r || 20) + 14)
+    .attr('text-anchor', 'middle')
+    .attr('fill', '#e2e8f0').attr('font-size', 11)
+    .style('pointer-events', 'none');
+
+  // Sub-label: type tag
+  nodeEl.append('text')
+    .text(d => d.type.toUpperCase())
+    .attr('x', 0).attr('y', d => (TYPE_SHAPES[d.type]?.r || 20) + 26)
+    .attr('text-anchor', 'middle')
+    .attr('fill', d => nodeColor(d)).attr('font-size', 9)
+    .attr('font-family', "'JetBrains Mono', monospace")
+    .style('pointer-events', 'none');
+
+  // Image/language sub-label for services
+  nodeEl.filter(d => d.image).append('text')
+    .text(d => d.image || '')
+    .attr('x', 0).attr('y', d => -(TYPE_SHAPES[d.type]?.r || 20) - 6)
+    .attr('text-anchor', 'middle')
+    .attr('fill', '#64748b').attr('font-size', 9)
+    .style('pointer-events', 'none');
+
+  sim.on('tick', () => {
+    linkEl.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+          .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+    nodeEl.attr('transform', d => `translate(${d.x},${d.y})`);
+  });
+
+  svg.on('click', () => {
+    document.getElementById('node-info').innerHTML =
+      '<strong>Click a node</strong> to inspect its connections.';
+  });
+}
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 loadGraph();

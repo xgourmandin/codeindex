@@ -19,6 +19,9 @@ from analyzers import (
     rust_analyzer,
     java_analyzer,
     php_analyzer,
+    docker_analyzer,
+    ci_analyzer,
+    schema_analyzer,
 )
 
 _SKIP = {
@@ -69,6 +72,18 @@ def detect_languages(root: Path) -> list:
     if (root / "composer.json").exists() or _any_match(root, ["*.php"]):
         langs.append("php")
 
+    # Infrastructure
+    compose_names = ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]
+    if any((root / n).exists() for n in compose_names) or _any_match(root, ["Dockerfile*"]):
+        langs.append("docker")
+
+    if (root / ".github" / "workflows").exists() or \
+       (root / ".gitlab-ci.yml").exists() or (root / ".gitlab-ci.yaml").exists():
+        langs.append("ci")
+
+    if _any_match(root, ["*.sql", "*.prisma"]):
+        langs.append("schema")
+
     return langs
 
 
@@ -77,9 +92,13 @@ def merge_links(target: dict, source: dict) -> None:
         target[k] = target.get(k, 0) + v
 
 
+_INFRA_TYPES = {"service", "pipeline", "database"}
+
 def link_kind(s_type: str, t_type: str) -> str:
     if s_type == "style" or t_type == "style":
         return "styles"
+    if s_type in _INFRA_TYPES or t_type in _INFRA_TYPES:
+        return "depends"
     if s_type in {"component", "route"} and t_type in {"component", "route"}:
         return "renders"
     return "imports"
@@ -95,6 +114,9 @@ _ANALYZERS = {
     "rust":       rust_analyzer,
     "java":       java_analyzer,
     "php":        php_analyzer,
+    "docker":     docker_analyzer,
+    "ci":         ci_analyzer,
+    "schema":     schema_analyzer,
 }
 
 

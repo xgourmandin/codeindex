@@ -86,7 +86,11 @@ def start_watcher(repo_path: str):
         print("watchdog not installed — run: pip install watchdog", file=sys.stderr)
         return
 
-    WATCHED_EXTS = {".py", ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs"}
+    WATCHED_EXTS = {
+        ".py", ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs",
+        ".rb", ".go", ".rs", ".java", ".kt", ".php",
+        ".yml", ".yaml", ".sql", ".prisma",
+    }
 
     class PyHandler(FileSystemEventHandler):
         def __init__(self):
