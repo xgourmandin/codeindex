@@ -1,0 +1,300 @@
+#!/usr/bin/env python3
+"""
+MCP server integration test — exercises all 6 tools via real JSON-RPC stdio.
+
+Usage:
+  python benchmark/test_mcp.py [--repo PATH] [--codeindex PATH]
+
+Starts the MCP server as a subprocess, sends JSON-RPC messages, validates responses.
+All 6 tools tested: analyze_repo, get_impact, get_dependencies,
+get_high_blast_files, build_symbol_index, lookup_symbol.
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# JSON-RPC client over subprocess stdio
+# ---------------------------------------------------------------------------
+class MCPClient:
+    def __init__(self, command: list[str], cwd: str) -> None:
+        self._proc = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=cwd,
+        )
+        self._id = 0
+
+    def _next_id(self) -> int:
+        self._id += 1
+        return self._id
+
+    def send(self, method: str, params: dict | None = None) -> dict:
+        msg_id = self._next_id()
+        msg = {"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params or {}}
+        line = json.dumps(msg) + "\n"
+        self._proc.stdin.write(line)
+        self._proc.stdin.flush()
+        raw = self._proc.stdout.readline()
+        if not raw:
+            stderr = self._proc.stderr.read()
+            raise RuntimeError(f"Server closed stdout. stderr: {stderr}")
+        return json.loads(raw)
+
+    def notify(self, method: str, params: dict | None = None) -> None:
+        msg = {"jsonrpc": "2.0", "method": method, "params": params or {}}
+        self._proc.stdin.write(json.dumps(msg) + "\n")
+        self._proc.stdin.flush()
+
+    def call_tool(self, name: str, arguments: dict) -> dict:
+        return self.send("tools/call", {"name": name, "arguments": arguments})
+
+    def close(self) -> None:
+        try:
+            self._proc.stdin.close()
+            self._proc.wait(timeout=3)
+        except Exception:
+            self._proc.kill()
+
+
+# ---------------------------------------------------------------------------
+# Test runner
+# ---------------------------------------------------------------------------
+PASS = "\033[32m✓\033[0m"
+FAIL = "\033[31m✗\033[0m"
+
+
+class Results:
+    def __init__(self) -> None:
+        self.passed = 0
+        self.failed = 0
+
+    def check(self, label: str, condition: bool, detail: str = "") -> None:
+        if condition:
+            self.passed += 1
+            print(f"  {PASS} {label}")
+        else:
+            self.failed += 1
+            print(f"  {FAIL} {label}" + (f"\n      {detail}" if detail else ""))
+
+    def summary(self) -> None:
+        total = self.passed + self.failed
+        print(f"\n{'─' * 50}")
+        print(f"  {self.passed}/{total} passed", end="")
+        if self.failed:
+            print(f"  ({self.failed} failed)")
+        else:
+            print("  — all good")
+        print(f"{'─' * 50}")
+
+
+def _result_text(response: dict) -> str:
+    try:
+        return response["result"]["content"][0]["text"]
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
+def _result_data(response: dict) -> dict:
+    try:
+        return json.loads(_result_text(response))
+    except Exception:
+        return {}
+
+
+def _is_error(response: dict) -> bool:
+    if "error" in response:
+        return True
+    try:
+        return response["result"].get("isError", False)
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+def test_initialize(client: MCPClient, r: Results) -> None:
+    print("\n── initialize ──")
+    resp = client.send("initialize", {
+        "protocolVersion": "2024-11-05",
+        "capabilities": {},
+        "clientInfo": {"name": "test", "version": "0.0.1"},
+    })
+    r.check("no error", "error" not in resp, str(resp.get("error")))
+    result = resp.get("result", {})
+    r.check("protocolVersion present", "protocolVersion" in result)
+    r.check("tools capability present", "tools" in result.get("capabilities", {}))
+    r.check("serverInfo present", "serverInfo" in result)
+    client.notify("notifications/initialized")
+
+
+def test_tools_list(client: MCPClient, r: Results) -> None:
+    print("\n── tools/list ──")
+    resp = client.send("tools/list")
+    r.check("no error", "error" not in resp, str(resp.get("error")))
+    tools = {t["name"] for t in resp.get("result", {}).get("tools", [])}
+    for name in ["analyze_repo", "get_impact", "get_dependencies",
+                 "get_high_blast_files", "build_symbol_index", "lookup_symbol"]:
+        r.check(f"tool registered: {name}", name in tools)
+
+
+def test_analyze_repo(client: MCPClient, r: Results, repo: str) -> None:
+    print("\n── analyze_repo ──")
+    resp = client.call_tool("analyze_repo", {"repo_path": repo})
+    r.check("no error", not _is_error(resp), _result_text(resp))
+    data = _result_data(resp)
+    r.check("success=true", data.get("success") is True)
+    r.check("files count > 0", data.get("files", 0) > 0, str(data))
+    r.check("languages present", isinstance(data.get("languages"), list))
+
+
+def test_get_impact(client: MCPClient, r: Results) -> None:
+    print("\n── get_impact ──")
+    resp = client.call_tool("get_impact", {"file_path": "codeindex/symbols.py"})
+    r.check("no error", not _is_error(resp), _result_text(resp))
+    data = _result_data(resp)
+    r.check("file field present", "file" in data, str(data))
+    r.check("blast_score present", "blast_score" in data)
+    r.check("report present", "report" in data)
+
+    # Unknown file should return error data, not crash
+    resp2 = client.call_tool("get_impact", {"file_path": "nonexistent/file.py"})
+    data2 = _result_data(resp2)
+    r.check("unknown file returns error key", "error" in data2, str(data2))
+
+
+def test_get_dependencies(client: MCPClient, r: Results) -> None:
+    print("\n── get_dependencies ──")
+    resp = client.call_tool("get_dependencies", {"file_path": "codeindex/cli.py"})
+    r.check("no error", not _is_error(resp), _result_text(resp))
+    data = _result_data(resp)
+    r.check("file field present", "file" in data, str(data))
+    r.check("imports list present", isinstance(data.get("imports"), list))
+    r.check("imported_by list present", isinstance(data.get("imported_by"), list))
+    r.check("blast_score present", "blast_score" in data)
+
+
+def test_get_high_blast_files(client: MCPClient, r: Results) -> None:
+    print("\n── get_high_blast_files ──")
+    resp = client.call_tool("get_high_blast_files", {"threshold": 1})
+    r.check("no error", not _is_error(resp), _result_text(resp))
+    data = _result_data(resp)
+    r.check("files list present", isinstance(data.get("files"), list))
+    r.check("count matches list length", data.get("count") == len(data.get("files", [])))
+    if data.get("files"):
+        first = data["files"][0]
+        r.check("file has blast_score", "blast_score" in first)
+        r.check("results sorted descending",
+                all(data["files"][i]["blast_score"] >= data["files"][i+1]["blast_score"]
+                    for i in range(len(data["files"]) - 1)))
+
+    # High threshold should return empty list, not crash
+    resp2 = client.call_tool("get_high_blast_files", {"threshold": 9999})
+    data2 = _result_data(resp2)
+    r.check("high threshold returns empty list", data2.get("count", -1) == 0)
+
+
+def test_build_symbol_index(client: MCPClient, r: Results, repo: str) -> None:
+    print("\n── build_symbol_index ──")
+    resp = client.call_tool("build_symbol_index", {"repo_path": repo})
+    r.check("no error", not _is_error(resp), _result_text(resp))
+    data = _result_data(resp)
+    r.check("success=true", data.get("success") is True)
+    r.check("total_symbols > 0", data.get("total_symbols", 0) > 0, str(data))
+    r.check("files > 0", data.get("files", 0) > 0)
+    r.check("output path present", "output" in data)
+
+
+def test_lookup_symbol(client: MCPClient, r: Results) -> None:
+    print("\n── lookup_symbol ──")
+
+    # Known exported symbol
+    resp = client.call_tool("lookup_symbol", {"name": "build_symbol_index"})
+    r.check("no error", not _is_error(resp), _result_text(resp))
+    data = _result_data(resp)
+    r.check("found=true", data.get("found") is True, str(data))
+    r.check("matches list present", isinstance(data.get("matches"), list))
+    if data.get("matches"):
+        m = data["matches"][0]
+        r.check("match has file", "file" in m)
+        r.check("match has line", "line" in m)
+        r.check("match has kind", "kind" in m)
+        r.check("correct file", "symbols.py" in m.get("file", ""), m.get("file"))
+        r.check("correct line", m.get("line") == 45, f"got line {m.get('line')}")
+
+    # Another known symbol
+    resp2 = client.call_tool("lookup_symbol", {"name": "compute_blast_radius"})
+    data2 = _result_data(resp2)
+    r.check("compute_blast_radius found", data2.get("found") is True)
+    if data2.get("matches"):
+        r.check("compute_blast_radius correct file",
+                "impact.py" in data2["matches"][0].get("file", ""))
+
+    # Unknown symbol
+    resp3 = client.call_tool("lookup_symbol", {"name": "__nonexistent_symbol_xyz__"})
+    data3 = _result_data(resp3)
+    r.check("unknown symbol returns found=false", data3.get("found") is False, str(data3))
+
+
+def test_unknown_tool(client: MCPClient, r: Results) -> None:
+    print("\n── error handling ──")
+    resp = client.call_tool("nonexistent_tool", {})
+    r.check("unknown tool returns error", "error" in resp or _is_error(resp), str(resp))
+
+    resp2 = client.send("nonexistent/method")
+    r.check("unknown method returns error", "error" in resp2, str(resp2))
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+def main() -> None:
+    import argparse
+    parser = argparse.ArgumentParser(description="MCP server integration tests")
+    parser.add_argument("--repo", default=".", help="Repo path (default: .)")
+    parser.add_argument(
+        "--codeindex",
+        default="codeindex",
+        help="Path to codeindex executable (default: codeindex)",
+    )
+    args = parser.parse_args()
+
+    repo = str(Path(args.repo).resolve())
+    command = [args.codeindex, "serve", "--mcp"]
+
+    print(f"Repo     : {repo}")
+    print(f"Command  : {' '.join(command)}")
+    print(f"Starting MCP server…")
+
+    client = MCPClient(command, cwd=repo)
+    time.sleep(0.3)  # let server start
+
+    r = Results()
+    try:
+        test_initialize(client, r)
+        test_tools_list(client, r)
+        test_analyze_repo(client, r, repo)
+        test_get_impact(client, r)
+        test_get_dependencies(client, r)
+        test_get_high_blast_files(client, r)
+        test_build_symbol_index(client, r, repo)
+        test_lookup_symbol(client, r)
+        test_unknown_tool(client, r)
+    finally:
+        client.close()
+
+    r.summary()
+    sys.exit(0 if r.failed == 0 else 1)
+
+
+if __name__ == "__main__":
+    main()
