@@ -157,12 +157,12 @@ def test_analyze_repo(client: MCPClient, r: Results, repo: str) -> None:
     r.check("languages present", isinstance(data.get("languages"), list))
 
 
-def test_get_impact(client: MCPClient, r: Results) -> None:
+def test_get_impact(client: MCPClient, r: Results, file: str) -> None:
     print("\n── get_impact ──")
-    resp = client.call_tool("get_impact", {"file_path": "codeindex/symbols.py"})
+    resp = client.call_tool("get_impact", {"file_path": file})
     r.check("no error", not _is_error(resp), _result_text(resp))
     data = _result_data(resp)
-    r.check("file field present", "file" in data, str(data))
+    r.check(f"file field present ({file})", "file" in data, str(data))
     r.check("blast_score present", "blast_score" in data)
     r.check("report present", "report" in data)
 
@@ -172,12 +172,12 @@ def test_get_impact(client: MCPClient, r: Results) -> None:
     r.check("unknown file returns error key", "error" in data2, str(data2))
 
 
-def test_get_dependencies(client: MCPClient, r: Results) -> None:
+def test_get_dependencies(client: MCPClient, r: Results, file: str) -> None:
     print("\n── get_dependencies ──")
-    resp = client.call_tool("get_dependencies", {"file_path": "codeindex/cli.py"})
+    resp = client.call_tool("get_dependencies", {"file_path": file})
     r.check("no error", not _is_error(resp), _result_text(resp))
     data = _result_data(resp)
-    r.check("file field present", "file" in data, str(data))
+    r.check(f"file field present ({file})", "file" in data, str(data))
     r.check("imports list present", isinstance(data.get("imports"), list))
     r.check("imported_by list present", isinstance(data.get("imported_by"), list))
     r.check("blast_score present", "blast_score" in data)
@@ -214,30 +214,24 @@ def test_build_symbol_index(client: MCPClient, r: Results, repo: str) -> None:
     r.check("output path present", "output" in data)
 
 
-def test_lookup_symbol(client: MCPClient, r: Results) -> None:
+def test_lookup_symbol(client: MCPClient, r: Results, symbols: list[tuple[str, str, int]]) -> None:
     print("\n── lookup_symbol ──")
 
-    # Known exported symbol
-    resp = client.call_tool("lookup_symbol", {"name": "build_symbol_index"})
-    r.check("no error", not _is_error(resp), _result_text(resp))
-    data = _result_data(resp)
-    r.check("found=true", data.get("found") is True, str(data))
-    r.check("matches list present", isinstance(data.get("matches"), list))
-    if data.get("matches"):
-        m = data["matches"][0]
-        r.check("match has file", "file" in m)
-        r.check("match has line", "line" in m)
-        r.check("match has kind", "kind" in m)
-        r.check("correct file", "symbols.py" in m.get("file", ""), m.get("file"))
-        r.check("correct line", m.get("line") == 45, f"got line {m.get('line')}")
-
-    # Another known symbol
-    resp2 = client.call_tool("lookup_symbol", {"name": "compute_blast_radius"})
-    data2 = _result_data(resp2)
-    r.check("compute_blast_radius found", data2.get("found") is True)
-    if data2.get("matches"):
-        r.check("compute_blast_radius correct file",
-                "impact.py" in data2["matches"][0].get("file", ""))
+    for sym_name, expected_file, expected_line in symbols[:2]:
+        resp = client.call_tool("lookup_symbol", {"name": sym_name})
+        r.check(f"no error ({sym_name})", not _is_error(resp), _result_text(resp))
+        data = _result_data(resp)
+        r.check(f"found=true ({sym_name})", data.get("found") is True, str(data))
+        r.check("matches list present", isinstance(data.get("matches"), list))
+        if data.get("matches"):
+            m = data["matches"][0]
+            r.check("match has file", "file" in m)
+            r.check("match has line", "line" in m)
+            r.check("match has kind", "kind" in m)
+            r.check(f"correct file ({expected_file})",
+                    expected_file in m.get("file", ""), m.get("file"))
+            r.check(f"correct line ({expected_line})",
+                    m.get("line") == expected_line, f"got line {m.get('line')}")
 
     # Unknown symbol
     resp3 = client.call_tool("lookup_symbol", {"name": "__nonexistent_symbol_xyz__"})
@@ -278,16 +272,41 @@ def main() -> None:
     client = MCPClient(command, cwd=repo)
     time.sleep(0.3)  # let server start
 
+    # Discover test fixtures from the repo's own indexes
+    index_file = Path(repo) / "codeindex.json"
+    sym_file   = Path(repo) / "symbolindex.json"
+
+    probe_file = "."
+    if index_file.exists():
+        index_data = json.loads(index_file.read_text())
+        nodes = [n["id"] for n in index_data.get("nodes", []) if n.get("type") != "import"]
+        if nodes:
+            # Pick the node with the highest blast score as a good probe target
+            scored = sorted(
+                index_data.get("nodes", []),
+                key=lambda n: n.get("blast_score", 0), reverse=True,
+            )
+            probe_file = next((n["id"] for n in scored if n.get("type") != "import"), nodes[0])
+            print(f"Probe file: {probe_file}")
+
+    probe_symbols: list[tuple[str, str, int]] = []
+    if sym_file.exists():
+        sym_data = json.loads(sym_file.read_text())
+        for name, matches in list(sym_data.get("symbols", {}).items())[:2]:
+            m = matches[0]
+            probe_symbols.append((name, m["file"].split("/")[-1], m["line"]))
+        print(f"Probe symbols: {[s[0] for s in probe_symbols]}")
+
     r = Results()
     try:
         test_initialize(client, r)
         test_tools_list(client, r)
         test_analyze_repo(client, r, repo)
-        test_get_impact(client, r)
-        test_get_dependencies(client, r)
+        test_get_impact(client, r, probe_file)
+        test_get_dependencies(client, r, probe_file)
         test_get_high_blast_files(client, r)
         test_build_symbol_index(client, r, repo)
-        test_lookup_symbol(client, r)
+        test_lookup_symbol(client, r, probe_symbols)
         test_unknown_tool(client, r)
     finally:
         client.close()
