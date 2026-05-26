@@ -17,7 +17,11 @@
       "Bash(cp /Users/david/Development/scheidydudes-github-repos/repo-vizualizer/analyzers/*.py /Users/david/Development/scheidydudes-github-repos/repo-vizualizer/codeindex/analyzers/)",
       "Bash(cp /Users/david/Development/scheidydudes-github-repos/repo-vizualizer/repo-viz-explorer.html /Users/david/Development/scheidydudes-github-repos/repo-vizualizer/viz/explorer.html)",
       "Bash(pip install *)",
-      "Bash(codeindex *)"
+      "Bash(codeindex *)",
+      "Bash(rtk ls *)",
+      "Bash(rtk git *)",
+      "Bash(rtk find *)",
+      "Bash(rtk grep *)"
     ]
   }
 }
