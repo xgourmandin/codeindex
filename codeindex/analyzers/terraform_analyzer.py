@@ -232,7 +232,7 @@ def analyze(root: Path, group_map: dict):
                 if mod_src.startswith(("./", "../")):
                     try:
                         target_dir = str(
-                            (f_tmp.parent / mod_src).resolve().relative_to(root)
+                            (f_tmp.parent / mod_src).resolve().relative_to(root.resolve())
                         )
                         module_src_resolved_map[mod_name] = target_dir
                     except ValueError:
@@ -272,7 +272,7 @@ def analyze(root: Path, group_map: dict):
                 if mod_src.startswith(("./", "../")):
                     try:
                         target_dir = str(
-                            (f.parent / mod_src).resolve().relative_to(root)
+                            (f.parent / mod_src).resolve().relative_to(root.resolve())
                         )
                     except ValueError:
                         continue
